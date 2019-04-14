@@ -1,6 +1,10 @@
 # neural-fortran
 
-A parallel neural net microframework.
+[![Build Status](https://travis-ci.org/modern-fortran/neural-fortran.svg?branch=master)](https://travis-ci.org/modern-fortran/neural-fortran)
+[![GitHub issues](https://img.shields.io/github/issues/modern-fortran/neural-fortran.svg)](https://github.com/modern-fortran/neural-fortran/issues)
+
+A parallel neural net microframework. 
+Read the paper [here](https://arxiv.org/abs/1902.06714).
 
 * [Features](https://github.com/modern-fortran/neural-fortran#features)
 * [Getting started](https://github.com/modern-fortran/neural-fortran#getting-started)
@@ -234,7 +238,6 @@ program example_mnist
 
   real(rk), allocatable :: tr_images(:,:), tr_labels(:)
   real(rk), allocatable :: te_images(:,:), te_labels(:)
-  real(rk), allocatable :: va_images(:,:), va_labels(:)
   real(rk), allocatable :: input(:,:), output(:,:)
 
   type(network_type) :: net
@@ -243,8 +246,7 @@ program example_mnist
   integer(ik) :: batch_size, batch_start, batch_end
   real(rk) :: pos
 
-  call load_mnist(tr_images, tr_labels, te_images,&
-                  te_labels, va_images, va_labels)
+  call load_mnist(tr_images, tr_labels, te_images, te_labels)
 
   net = network_type([784, 30, 10])
 
