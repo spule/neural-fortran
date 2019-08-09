@@ -1,10 +1,5 @@
 module mod_network
 
-  use mod_activation, only: gaussian, gaussian_prime,&
-                            relu, relu_prime,&
-                            sigmoid, sigmoid_prime,&
-                            step, step_prime,&
-                            tanhf, tanh_prime
   use mod_kinds, only: ik, rk
   use mod_layer, only: array1d, array2d, db_init, dw_init,&
                        db_co_sum, dw_co_sum, layer_type
@@ -19,8 +14,6 @@ module mod_network
 
     type(layer_type), allocatable :: layers(:)
     integer, allocatable :: dims(:)
-    procedure(activation_function), pointer, nopass :: activation => null()
-    procedure(activation_function), pointer, nopass :: activation_prime => null()
 
   contains
 
@@ -32,12 +25,14 @@ module mod_network
     procedure, public, pass(self) :: loss
     procedure, public, pass(self) :: output
     procedure, public, pass(self) :: save
-    procedure, public, pass(self) :: set_activation
+    procedure, public, pass(self) :: set_activation_equal
+    procedure, public, pass(self) :: set_activation_layers
     procedure, public, pass(self) :: sync
     procedure, public, pass(self) :: train_batch
     procedure, public, pass(self) :: train_single
     procedure, public, pass(self) :: update
 
+    generic, public :: set_activation => set_activation_equal, set_activation_layers
     generic, public :: train => train_batch, train_single
 
   end type network_type
@@ -45,14 +40,6 @@ module mod_network
   interface network_type
     module procedure :: net_constructor
   endinterface network_type
-
-  interface
-    pure function activation_function(x)
-      import :: rk
-      real(rk), intent(in) :: x(:)
-      real(rk) :: activation_function(size(x))
-    end function activation_function
-  end interface
 
 contains
 
@@ -102,13 +89,13 @@ contains
       call dw_init(dw, dims)
 
       n = size(dims)
-      db(n) % array = (layers(n) % a - y) * self % activation_prime(layers(n) % z)
+      db(n) % array = (layers(n) % a - y) * self % layers(n) % activation_prime(layers(n) % z)
       dw(n-1) % array = matmul(reshape(layers(n-1) % a, [dims(n-1), 1]),&
                                reshape(db(n) % array, [1, dims(n)]))
 
       do n = size(dims) - 1, 2, -1
         db(n) % array = matmul(layers(n) % w, db(n+1) % array)&
-                      * self % activation_prime(layers(n) % z)
+                      * self % layers(n) % activation_prime(layers(n) % z)
         dw(n-1) % array = matmul(reshape(layers(n-1) % a, [dims(n-1), 1]),&
                                  reshape(db(n) % array, [1, dims(n)]))
       end do
@@ -127,7 +114,7 @@ contains
       layers(1) % a = x
       do n = 2, size(layers)
         layers(n) % z = matmul(transpose(layers(n-1) % w), layers(n-1) % a) + layers(n) % b
-        layers(n) % a = self % activation(layers(n) % z)
+        layers(n) % a = self % layers(n) % activation(layers(n) % z)
       end do
     end associate
   end subroutine fwdprop
@@ -151,13 +138,18 @@ contains
     ! Loads the network from file.
     class(network_type), intent(in out) :: self
     character(len=*), intent(in) :: filename
-    integer(ik) :: fileunit, n, num_layers
+    integer(ik) :: fileunit, n, num_layers, layer_idx
     integer(ik), allocatable :: dims(:)
+    character(len=100) :: buffer ! activation string
     open(newunit=fileunit, file=filename, status='old', action='read')
     read(fileunit, fmt=*) num_layers
     allocate(dims(num_layers))
     read(fileunit, fmt=*) dims
     call self % init(dims)
+    do n = 1, num_layers
+      read(fileunit, fmt=*) layer_idx, buffer
+      call self % layers(layer_idx) % set_activation(trim(buffer))
+    end do
     do n = 2, size(self % dims)
       read(fileunit, fmt=*) self % layers(n) % b
     end do
@@ -181,9 +173,9 @@ contains
     real(rk), allocatable :: a(:)
     integer(ik) :: n
     associate(layers => self % layers)
-      a = self % activation(matmul(transpose(layers(1) % w), x) + layers(2) % b)
+      a = self % layers(2) % activation(matmul(transpose(layers(1) % w), x) + layers(2) % b)
       do n = 3, size(layers)
-        a = self % activation(matmul(transpose(layers(n-1) % w), a) + layers(n) % b)
+        a = self % layers(n) % activation(matmul(transpose(layers(n-1) % w), a) + layers(n) % b)
       end do
     end associate
   end function output
@@ -196,6 +188,9 @@ contains
     open(newunit=fileunit, file=filename)
     write(fileunit, fmt=*) size(self % dims)
     write(fileunit, fmt=*) self % dims
+    do n = 1, size(self % dims)
+      write(fileunit, fmt=*) n, self % layers(n) % activation_str
+    end do
     do n = 2, size(self % dims)
       write(fileunit, fmt=*) self % layers(n) % b
     end do
@@ -205,33 +200,23 @@ contains
     close(fileunit)
   end subroutine save
 
-  pure subroutine set_activation(self, activation)
-    ! Sets the activation functions. Input string must match one of
-    ! provided activation functions, otherwise it defaults to sigmoid.
-    ! If activation not present, defaults to sigmoid.
+  pure subroutine set_activation_equal(self, activation)
+    ! A thin wrapper around layer % set_activation().
+    ! This method can be used to set an activation function
+    ! for all layers at once. 
     class(network_type), intent(in out) :: self
     character(len=*), intent(in) :: activation
-    select case(trim(activation))
-      case('gaussian')
-        self % activation => gaussian
-        self % activation_prime => gaussian_prime
-      case('relu')
-        self % activation => relu
-        self % activation_prime => relu_prime
-      case('sigmoid')
-        self % activation => sigmoid
-        self % activation_prime => sigmoid_prime
-      case('step')
-        self % activation => step
-        self % activation_prime => step_prime
-      case('tanh')
-        self % activation => tanhf
-        self % activation_prime => tanh_prime
-      case default
-        self % activation => sigmoid
-        self % activation_prime => sigmoid_prime
-    end select
-  end subroutine set_activation
+    call self % layers(:) % set_activation(activation)
+  end subroutine set_activation_equal
+
+  pure subroutine set_activation_layers(self, activation)
+    ! A thin wrapper around layer % set_activation().
+    ! This method can be used to set different activation functions
+    ! for each layer separately. 
+    class(network_type), intent(in out) :: self
+    character(len=*), intent(in) :: activation(size(self % layers))
+    call self % layers(:) % set_activation(activation)
+  end subroutine set_activation_layers
 
   subroutine sync(self, image)
     ! Broadcasts network weights and biases from
